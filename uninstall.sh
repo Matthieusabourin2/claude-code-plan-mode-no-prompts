@@ -2,7 +2,7 @@
 # Removes the hook from ~/.claude/settings.json (backup first) and deletes the script.
 set -euo pipefail
 settings="$HOME/.claude/settings.json"
-cmd='"$HOME/.claude/hooks/plan-mode-allow-reads.sh"'
+cmd='"$HOME/.claude/hooks/plan-mode-no-prompts.sh"'
 
 if [ -f "$settings" ]; then
   jq -e . "$settings" >/dev/null 2>&1 || { echo "$settings is not valid JSON: fix it first. Nothing changed."; exit 1; }
@@ -14,5 +14,5 @@ if [ -f "$settings" ]; then
   cat "$tmp" > "$settings"
   rm "$tmp"
 fi
-rm -f "$HOME/.claude/hooks/plan-mode-allow-reads.sh"
+rm -f "$HOME/.claude/hooks/plan-mode-no-prompts.sh"
 echo "Uninstalled."

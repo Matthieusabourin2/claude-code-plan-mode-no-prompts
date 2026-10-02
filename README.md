@@ -1,16 +1,25 @@
-# Mode plan sans demandes d'autorisation pour les lectures
+# Mode plan sans aucune demande d'autorisation
 
-En mode plan, Claude Code approuve désormais tout seul les **lectures** faites par vos outils MCP : recherche de mails, lecture d'une page Notion, liste des tickets GitHub, etc. Les **écritures** (envoyer, créer, modifier, supprimer) demandent toujours votre accord.
+En mode plan, Claude Code ne vous demande plus jamais « Autoriser Claude à utiliser … ? ». Tous les appels d'outils sont approuvés automatiquement, **écritures comprises**.
+
+> ⚠️ **À lire avant d'installer.** Ce hook supprime le filet de sécurité du mode plan. Pendant la phase de plan, Claude peut, sans vous demander :
+> - envoyer un mail (`send_email`), répondre, transférer ;
+> - créer, modifier, remplacer ou supprimer des données dans vos outils MCP (`create_*`, `update_*`, `replace_*`, `delete_*`, `query` SQL, etc.) ;
+> - télécharger des fichiers sur votre disque (`download_*`) ;
+> - exécuter n'importe quelle commande Bash, éditer ou écrire des fichiers ;
+> - appeler n'importe quelle URL avec WebFetch.
+>
+> Claude reste *instruit* de ne rien modifier avant que vous ayez validé le plan, et il respecte en général cette consigne. Mais plus rien ne l'y *oblige*. Si vous voulez garder l'accord pour les écritures, utilisez le mode lecture seule (voir plus bas).
 
 ## 1. Ce que c'est
 
-Le mode plan sert à explorer avant d'agir : Claude lit, cherche, puis propose un plan. Mais dans Claude Desktop, chaque appel à un outil MCP pendant le plan affiche « Autoriser Claude à utiliser … ? », même pour une simple recherche. Un plan qui consulte dix sources vous demande dix validations.
+Le mode plan sert à explorer avant d'agir : Claude lit, cherche, puis propose un plan. Mais dans Claude Desktop, chaque appel à un outil MCP pendant le plan affiche une demande d'autorisation, même pour une simple recherche dans vos mails. Un plan qui consulte dix sources vous demande dix validations.
 
 Les réglages habituels n'y changent rien :
 - `defaultMode: "bypassPermissions"` ne s'applique pas tant que la session est en mode plan.
 - Des règles `permissions.allow` comme `mcp__gmail__search` ne lèvent pas le blocage du mode plan. Testé : l'appel reste refusé avec « Cannot call … while in plan mode ».
 
-Ce qui marche, c'est un hook `PermissionRequest`. Claude Code l'appelle au moment précis où il s'apprête à vous demander l'autorisation, et le hook peut répondre à votre place.
+Ce qui marche, c'est un hook `PermissionRequest`. Claude Code l'appelle au moment précis où il s'apprête à vous demander l'autorisation, et le hook répond « oui » à votre place.
 
 ## 2. Comment ça marche
 
@@ -21,34 +30,37 @@ Claude veut appeler un outil pendant le plan
 Claude Code s'apprête à afficher « Autoriser … ? »
         │
         ▼
-Hook PermissionRequest (plan-mode-allow-reads.sh)
+Hook PermissionRequest (plan-mode-no-prompts.sh)
         │
-        ├─ mode ≠ plan ............................ ne fait rien
-        ├─ nom d'outil MCP contenant un mot d'écriture
-        │  (create, update, delete, send, replace, run,
-        │  download…) .............................. demande normale
-        ├─ nom d'outil MCP commençant par search_, list_,
-        │  get_, read_, find_, fetch_, lookup_, describe_,
-        │  show_, view_ ou count_ (ou égal à l'un de ces
-        │  verbes), ou WebSearch ................... « allow » : pas de demande
-        └─ tout le reste (Bash, Edit, WebFetch…) .. demande normale
+        ├─ mode ≠ plan ...................... ne fait rien (comportement normal)
+        ├─ ExitPlanMode, AskUserQuestion .... ne fait rien (voir ci-dessous)
+        └─ tout autre outil ................. « allow » : pas de demande
 ```
 
-Le hook ne décide que d'après le **nom de l'outil**, plus précisément la partie après le dernier `__`, mise en minuscules. Par exemple, `mcp__gmail__search_threads` donne `search_threads`, que le hook approuve. `mcp__gmail__send_email` donne `send_email`, qui reste soumis à votre accord. Le refus prime : `get_or_create_user` contient `create`, donc la demande s'affiche.
+Deux outils restent volontairement en dehors, car ce ne sont pas des autorisations :
+- **ExitPlanMode**, la validation du plan. Si elle était approuvée automatiquement, Claude passerait à l'exécution sans que vous ayez relu son plan, et le mode plan n'aurait plus de raison d'être.
+- **AskUserQuestion**, quand Claude vous pose une question à choix.
 
-Les verbes ambigus ne sont volontairement pas approuvés :
-- `query`, car une requête SQL peut écrire ;
-- `download`, qui écrit sur le disque ;
-- les noms en camelCase comme `getContact`.
+### Les risques en clair
 
-Il approuve aussi `set_session_title`, l'outil de Claude Desktop qui renomme une session. C'est utile si vous utilisez le hook compagnon [claude-code-emoji-session-titles](https://github.com/Matthieusabourin2/claude-code-emoji-session-titles).
+- **Écritures sans accord.** Tout ce qui est listé dans l'encadré ci-dessus peut se produire pendant le plan sans que vous le voyiez venir.
+- **Contenu piégé.** Un mail ou une page web lus pendant le plan peuvent contenir des instructions cachées (« prompt injection »). Sans demande d'autorisation, une telle injection pourrait déclencher un envoi de mail ou un appel WebFetch qui fait sortir vos données.
+- **Ce qui peut encore demander.** Le hook répond aux demandes que Claude Code lui transmet. Les écritures dans certains chemins protégés (`.git`, `.claude`…) et les outils MCP qui exigent explicitement une interaction (`requiresUserInteraction`) peuvent encore afficher une demande.
 
-### Les risques, à lire avant d'installer
+### Mode lecture seule (optionnel)
 
-- **Un outil mal nommé passe sans demande.** Le hook ne lit pas la description des outils ; il fait confiance aux noms choisis par l'auteur du serveur MCP. Un outil `get_stats` qui écrirait en douce serait approuvé. Avant d'installer, parcourez les outils de vos serveurs (`/mcp` dans le terminal). En cas de doute, restreignez le motif (voir « Personnaliser »).
-- **Une lecture peut ramener du contenu piégé.** Un mail ou une page lus pendant le plan peuvent contenir des instructions cachées (« prompt injection »). C'est pour cela que **WebFetch n'est pas approuvé** : une injection pourrait sinon envoyer vos données vers une URL quelconque sans que vous le voyiez. WebSearch est approuvé, car il ne fait qu'envoyer une requête à un moteur de recherche.
+Avec `PLAN_MODE_READS_ONLY=1`, le hook n'approuve que :
+- les outils MCP dont le nom commence par `search_`, `list_`, `get_`, `read_`, `find_`, `fetch_`, `lookup_`, `describe_`, `show_`, `view_` ou `count_`, sans aucun mot d'écriture (`create`, `delete`, `send`, `replace`, `download`…) ;
+- WebSearch ;
+- le renommage de session de Claude Desktop.
 
-Les commandes Bash qui ne sont pas en lecture seule demandent toujours votre accord. Les lectures Bash de base (`ls`, `cat`, `grep`…) passent déjà sans demande en mode plan.
+Tout le reste (Bash, Edit, WebFetch, `query`, écritures MCP) redemande votre accord. Le tri se fait uniquement sur le nom de l'outil : un outil mal nommé par l'auteur de son serveur MCP pourrait passer.
+
+```json
+"env": { "PLAN_MODE_READS_ONLY": "1" }
+```
+
+La variable `PLAN_MODE_READ_PATTERN` remplace la liste des verbes de lecture. C'est une expression régulière étendue, appliquée à la partie du nom après le dernier `__`, en minuscules.
 
 ## 3. Comment l'utiliser
 
@@ -60,8 +72,8 @@ Les commandes Bash qui ne sont pas en lecture seule demandent toujours votre acc
 ### Installation
 
 ```bash
-git clone https://github.com/Matthieusabourin2/claude-code-plan-mode-auto-reads.git
-cd claude-code-plan-mode-auto-reads
+git clone https://github.com/Matthieusabourin2/claude-code-plan-mode-no-prompts.git
+cd claude-code-plan-mode-no-prompts
 ./test.sh      # vérifie les décisions sur de faux outils, sans rien toucher
 ./install.sh
 ```
@@ -72,27 +84,19 @@ cd claude-code-plan-mode-auto-reads
 
 1. Quittez et relancez Claude Desktop.
 2. Ouvrez une nouvelle session et passez en mode plan.
-3. Demandez une lecture, par exemple « cherche mon dernier mail de X ».
+3. Demandez une recherche, par exemple « cherche mon dernier mail de X ».
 
-L'appel doit passer sans fenêtre d'autorisation.
+Aucune fenêtre d'autorisation ne doit apparaître.
 
 Pour voir les décisions du hook, ajoutez ceci au bloc `env` de `~/.claude/settings.json` :
 
 ```json
-"env": { "PLAN_MODE_ALLOW_LOG": "/tmp/plan-mode-allow.log" }
+"env": { "PLAN_MODE_ALLOW_LOG": "/tmp/plan-mode.log" }
 ```
 
-Chaque appel y est noté avec `allow` ou `ask`.
+Chaque demande y est notée avec `allow` ou `ask`.
 
-### Personnaliser
-
-La variable `PLAN_MODE_READ_PATTERN` remplace la liste des verbes approuvés. C'est une expression régulière étendue, appliquée à la partie du nom après le dernier `__`, en minuscules. La liste des mots d'écriture garde la priorité, et `WebSearch` et `set_session_title` ne sont pas concernés. Par exemple, pour n'approuver que les recherches :
-
-```json
-"env": { "PLAN_MODE_READ_PATTERN": "^search(_|$)" }
-```
-
-Si un serveur que vous connaissez bien utilise `query` en lecture seule, ajoutez-le : `"^(search|list|get|read|find|query)(_|$)"`.
+Ce hook va bien avec [claude-code-emoji-session-titles](https://github.com/Matthieusabourin2/claude-code-emoji-session-titles) : le renommage automatique de session passe lui aussi sans demande en mode plan.
 
 ### Désinstaller
 
